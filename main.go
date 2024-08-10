@@ -21,6 +21,11 @@ type User struct {
 	Password string `json:"password"`
 }
 
+type Category struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 func init() {
 	dsn := "financeuser:password@tcp(127.0.0.1:3306)/financeApp"
 	db, err = sql.Open("mysql", dsn)
@@ -41,6 +46,12 @@ func main() {
 	router.HandleFunc("/users/{id}", getUserByID).Methods("GET")
 	router.HandleFunc("/users/{id}", updateUser).Methods("PUT")
 	router.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
+
+	router.HandleFunc("/categories", createCategory).Methods("POST")
+	router.HandleFunc("/categories", getCategories).Methods("GET")
+	router.HandleFunc("/categories/{id}", getCategoryByID).Methods("GET")
+	router.HandleFunc("/categories/{id}", updateCategory).Methods("PUT")
+	router.HandleFunc("/categories/{id}", deleteCategory).Methods("DELETE")
 
 	log.Fatal(http.ListenAndServe(":8000", router))
 }
@@ -188,7 +199,7 @@ func getUserByID(w http.ResponseWriter, r *http.Request) {
 
 func updateUser(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
-	id, err := strconv.Atoi(params["id"]) 
+	id, err := strconv.Atoi(params["id"])
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
@@ -250,6 +261,190 @@ func deleteUser(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"message": "User deleted successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func createCategory(w http.ResponseWriter, r *http.Request) {
+	var category Category
+	err := json.NewDecoder(r.Body).Decode(&category)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if category.Name == "" {
+		http.Error(w, "Category name is required", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("INSERT INTO categories(name) VALUES(?)")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(category.Name)
+	if err != nil {
+		http.Error(w, "Failed to create category", http.StatusInternalServerError)
+		return
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		http.Error(w, "Failed to retrieve category ID", http.StatusInternalServerError)
+		return
+	}
+
+	category.ID = int(id)
+
+	response := map[string]interface{}{
+		"message":  "Category created successfully",
+		"category": category,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+func getCategories(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT id, name FROM categories")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var categories []Category
+
+	for rows.Next() {
+		var category Category
+		err := rows.Scan(&category.ID, &category.Name)
+		if err != nil {
+			http.Error(w, "Error scanning category", http.StatusInternalServerError)
+			return
+		}
+		categories = append(categories, category)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		http.Error(w, "Error with rows", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"data": map[string]interface{}{
+			"categories": categories,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func getCategoryByID(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	var category Category
+	err = db.QueryRow("SELECT id, name FROM categories WHERE id = ?", id).Scan(&category.ID, &category.Name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Category not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	response := map[string]interface{}{
+		"category": category,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func updateCategory(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	var category Category
+	err = json.NewDecoder(r.Body).Decode(&category)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if category.Name == "" {
+		http.Error(w, "Category name is required", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("UPDATE categories SET name = ? WHERE id = ?")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(category.Name, id)
+	if err != nil {
+		http.Error(w, "Failed to update category", http.StatusInternalServerError)
+		return
+	}
+
+	category.ID = id
+
+	response := map[string]interface{}{
+		"message":  "Category updated successfully",
+		"category": category,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func deleteCategory(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("DELETE FROM categories WHERE id = ?")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(id)
+	if err != nil {
+		http.Error(w, "Failed to delete category", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message": "Category deleted successfully",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
