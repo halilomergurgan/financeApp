@@ -36,6 +36,7 @@ func init() {
 func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/users", createUser).Methods("POST")
+	router.HandleFunc("/users", getUsers).Methods("GET")
 
 	log.Fatal(http.ListenAndServe(":8000", router))
 }
@@ -114,5 +115,43 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+func getUsers(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT id, username, email FROM users")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []User
+
+	for rows.Next() {
+		var user User
+		err := rows.Scan(&user.ID, &user.Username, &user.Email)
+		if err != nil {
+			http.Error(w, "Error scanning user", http.StatusInternalServerError)
+			return
+		}
+		users = append(users, user)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		http.Error(w, "Error with rows", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message": "success",
+		"data": map[string]interface{}{
+			"users": users,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
