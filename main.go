@@ -26,6 +26,14 @@ type Category struct {
 	Name string `json:"name"`
 }
 
+type Transaction struct {
+	ID         int     `json:"id"`
+	UserID     int     `json:"user_id"`
+	Amount     float64 `json:"amount"`
+	CategoryID int     `json:"category_id"`
+	Type       string  `json:"type"`
+}
+
 func init() {
 	dsn := "financeuser:password@tcp(127.0.0.1:3306)/financeApp"
 	db, err = sql.Open("mysql", dsn)
@@ -52,6 +60,12 @@ func main() {
 	router.HandleFunc("/categories/{id}", getCategoryByID).Methods("GET")
 	router.HandleFunc("/categories/{id}", updateCategory).Methods("PUT")
 	router.HandleFunc("/categories/{id}", deleteCategory).Methods("DELETE")
+
+	router.HandleFunc("/transactions", createTransaction).Methods("POST")
+	router.HandleFunc("/transactions", getTransactions).Methods("GET")
+	router.HandleFunc("/transactions/{id}", getTransactionByID).Methods("GET")
+	router.HandleFunc("/transactions/{id}", updateTransaction).Methods("PUT")
+	router.HandleFunc("/transactions/{id}", deleteTransaction).Methods("DELETE")
 
 	log.Fatal(http.ListenAndServe(":8000", router))
 }
@@ -445,6 +459,190 @@ func deleteCategory(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"message": "Category deleted successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func createTransaction(w http.ResponseWriter, r *http.Request) {
+	var transaction Transaction
+	err := json.NewDecoder(r.Body).Decode(&transaction)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if transaction.Amount == 0 || transaction.CategoryID == 0 || transaction.UserID == 0 || transaction.Type == "" {
+		http.Error(w, "Amount, category ID, user ID, and type are required", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("INSERT INTO transactions(user_id, amount, category_id, type) VALUES(?, ?, ?, ?)")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(transaction.UserID, transaction.Amount, transaction.CategoryID, transaction.Type)
+	if err != nil {
+		http.Error(w, "Failed to create transaction", http.StatusInternalServerError)
+		return
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		http.Error(w, "Failed to retrieve transaction ID", http.StatusInternalServerError)
+		return
+	}
+
+	transaction.ID = int(id)
+
+	response := map[string]interface{}{
+		"message":     "Transaction created successfully",
+		"transaction": transaction,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+func getTransactions(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT id, user_id, amount, category_id, type FROM transactions")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var transactions []Transaction
+
+	for rows.Next() {
+		var transaction Transaction
+		err := rows.Scan(&transaction.ID, &transaction.UserID, &transaction.Amount, &transaction.CategoryID, &transaction.Type)
+		if err != nil {
+			http.Error(w, "Error scanning transaction", http.StatusInternalServerError)
+			return
+		}
+		transactions = append(transactions, transaction)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		http.Error(w, "Error with rows", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"data": map[string]interface{}{
+			"transactions": transactions,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func getTransactionByID(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	var transaction Transaction
+	err = db.QueryRow("SELECT id, user_id, amount, category_id, type FROM transactions WHERE id = ?", id).Scan(&transaction.ID, &transaction.UserID, &transaction.Amount, &transaction.CategoryID, &transaction.Type)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Transaction not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	response := map[string]interface{}{
+		"transaction": transaction,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func updateTransaction(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	var transaction Transaction
+	err = json.NewDecoder(r.Body).Decode(&transaction)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if transaction.Amount == 0 || transaction.CategoryID == 0 || transaction.UserID == 0 || transaction.Type == "" {
+		http.Error(w, "Amount, category ID, user ID, and type are required", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("UPDATE transactions SET user_id = ?, amount = ?, category_id = ?, type = ? WHERE id = ?")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(transaction.UserID, transaction.Amount, transaction.CategoryID, transaction.Type, id)
+	if err != nil {
+		http.Error(w, "Failed to update transaction", http.StatusInternalServerError)
+		return
+	}
+
+	transaction.ID = id
+
+	response := map[string]interface{}{
+		"message":     "Transaction updated successfully",
+		"transaction": transaction,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func deleteTransaction(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
+		return
+	}
+
+	stmt, err := db.Prepare("DELETE FROM transactions WHERE id = ?")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(id)
+	if err != nil {
+		http.Error(w, "Failed to delete transaction", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message": "Transaction deleted successfully",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
