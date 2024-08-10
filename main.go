@@ -9,16 +9,18 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var db *sql.DB
 var err error
 
 type User struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	ID                   int    `json:"id"`
+	Username             string `json:"username"`
+	Email                string `json:"email"`
+	Password             string `json:"password"`
+	PasswordConfirmation string `json:"password_confirmation"`
 }
 
 type Category struct {
@@ -70,72 +72,80 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8000", router))
 }
 
+func (u User) MarshalJSON() ([]byte, error) {
+	type Alias User
+	return json.Marshal(&struct {
+		Password             string `json:"password,omitempty"`
+		PasswordConfirmation string `json:"password_confirmation,omitempty"`
+		*Alias
+	}{
+		Password:             "",
+		PasswordConfirmation: "",
+		Alias:                (*Alias)(&u),
+	})
+}
+
+
 func createUser(w http.ResponseWriter, r *http.Request) {
 	var user User
 	err := json.NewDecoder(r.Body).Decode(&user)
 	if err != nil {
-		response := map[string]string{"error": "Invalid request payload"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
-	if user.Username == "" || user.Email == "" || user.Password == "" {
-		response := map[string]string{"error": "Username, email, and password are required"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+	if user.Username == "" || user.Email == "" || user.Password == "" || user.PasswordConfirmation == "" {
+		http.Error(w, "Username, email, password, and password confirmation are required", http.StatusBadRequest)
 		return
 	}
+
+	if user.Password != user.PasswordConfirmation {
+		http.Error(w, "Passwords do not match", http.StatusBadRequest)
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+	user.Password = string(hashedPassword)
 
 	var exists bool
 	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", user.Email).Scan(&exists)
 	if err != nil {
-		response := map[string]string{"error": "Database error"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
 	if exists {
-		response := map[string]string{"error": "Email address already in use"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Email address already in use", http.StatusConflict)
 		return
 	}
 
 	stmt, err := db.Prepare("INSERT INTO users(username, email, password) VALUES(?, ?, ?)")
 	if err != nil {
-		response := map[string]string{"error": "Database error"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 	defer stmt.Close()
 
 	result, err := stmt.Exec(user.Username, user.Email, user.Password)
 	if err != nil {
-		response := map[string]string{"error": "Failed to create user"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		response := map[string]string{"error": "Failed to retrieve user ID"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(response)
+		http.Error(w, "Failed to retrieve user ID", http.StatusInternalServerError)
 		return
 	}
 
 	user.ID = int(id)
+
+	// Şifreyi yanıt olarak döndürmüyoruz
+	user.Password = ""
 
 	response := map[string]interface{}{
 		"message": "User created successfully",
